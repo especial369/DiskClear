@@ -130,18 +130,25 @@ fn browser_cache_roots() -> Vec<PathBuf> {
 }
 
 /// 解析分类的扫描根目录。`drive` 为所选盘符字母（如 "C"）。
+///
+/// 盘符隔离：系统级分类（临时文件 / 浏览器缓存 / 更新缓存 / 系统日志 / 缩略图缓存）
+/// 的目录物理上只存在于系统盘（`%TEMP%`、`C:\Windows\*`、`%LOCALAPPDATA%`），仅在所选盘
+/// 为系统盘时扫描；选非系统盘时这些分类返回空，避免把 C 盘系统垃圾混入其他盘结果。
+/// 回收站随所选盘符扫描。
 pub fn roots_for(id: &str, drive: &str) -> Vec<PathBuf> {
     let local = env_path("LOCALAPPDATA", r"C:\Users\Public\AppData\Local");
+    let sys_drive = std::env::var("SystemDrive").unwrap_or_else(|_| "C:".to_string());
+    let is_system_drive = drive.eq_ignore_ascii_case(sys_drive.trim_end_matches(':'));
     match id {
-        "temp" => vec![
-            env_path("TEMP", &format!(r"{}:\Windows\Temp", drive)),
+        "temp" if is_system_drive => vec![
+            env_path("TEMP", r"C:\Windows\Temp"),
             PathBuf::from(r"C:\Windows\Temp"),
         ],
         "recycle" => vec![PathBuf::from(format!("{}:\\$Recycle.Bin", drive))],
-        "browser" => browser_cache_roots(),
-        "update" => vec![PathBuf::from(r"C:\Windows\SoftwareDistribution\Download")],
-        "logs" => vec![PathBuf::from(r"C:\Windows\Logs")],
-        "thumbnail" => vec![local.join(r"Microsoft\Windows\Explorer")],
+        "browser" if is_system_drive => browser_cache_roots(),
+        "update" if is_system_drive => vec![PathBuf::from(r"C:\Windows\SoftwareDistribution\Download")],
+        "logs" if is_system_drive => vec![PathBuf::from(r"C:\Windows\Logs")],
+        "thumbnail" if is_system_drive => vec![local.join(r"Microsoft\Windows\Explorer")],
         _ => Vec::new(),
     }
 }

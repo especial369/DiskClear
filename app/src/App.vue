@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted } from "vue"
+import { onMounted, markRaw, type Component } from "vue"
 import SideBar from "./components/SideBar.vue"
 import StatusBar from "./components/StatusBar.vue"
 import QuickClean from "./pages/QuickClean.vue"
@@ -7,23 +7,21 @@ import Recovery from "./pages/Recovery.vue"
 import SettingsPage from "./pages/SettingsPage.vue"
 import LargeFiles from "./pages/LargeFiles.vue"
 import Duplicates from "./pages/Duplicates.vue"
-import Placeholder from "./components/Placeholder.vue"
-import { store, applyTheme } from "./store"
+import SpaceAnalysis from "./pages/SpaceAnalysis.vue"
+import AppUninstall from "./pages/AppUninstall.vue"
+import { store, applyTheme, type PageId } from "./store"
 import { api } from "./api"
 
-const placeholders: Record<string, { milestone: string; title: string; desc: string; icon: string }> = {
-  space: {
-    milestone: "M3 里程碑交付",
-    title: "磁盘空间分析",
-    desc: "矩形树图（Treemap）可视化目录占用，点击下钻、悬停查看详情、右键快捷操作，看得见空间去哪了。",
-    icon: "📊",
-  },
-  uninstall: {
-    milestone: "M3 里程碑交付",
-    title: "应用卸载",
-    desc: "列出已安装程序，调起自带卸载器并提示目录级残留；注册表清理规划于 v2。",
-    icon: "📦",
-  },
+// keep-alive 缓存全部页面：切走不销毁、切回秒开，重负载数据（应用卸载列表 / 空间分析结果）随实例保留。
+// markRaw 避免组件对象被响应式化（性能与告警）。
+const pages: Record<PageId, Component> = {
+  clean: markRaw(QuickClean),
+  large: markRaw(LargeFiles),
+  dupes: markRaw(Duplicates),
+  recovery: markRaw(Recovery),
+  settings: markRaw(SettingsPage),
+  space: markRaw(SpaceAnalysis),
+  uninstall: markRaw(AppUninstall),
 }
 
 onMounted(async () => {
@@ -42,18 +40,9 @@ onMounted(async () => {
     <SideBar />
     <div class="main-col">
       <main class="main-area">
-        <QuickClean v-if="store.page === 'clean'" />
-        <LargeFiles v-else-if="store.page === 'large'" />
-        <Duplicates v-else-if="store.page === 'dupes'" />
-        <Recovery v-else-if="store.page === 'recovery'" />
-        <SettingsPage v-else-if="store.page === 'settings'" />
-        <Placeholder
-          v-else
-          :milestone="placeholders[store.page].milestone"
-          :title="placeholders[store.page].title"
-          :desc="placeholders[store.page].desc"
-          :icon="placeholders[store.page].icon"
-        />
+        <keep-alive :max="10">
+          <component :is="pages[store.page]" />
+        </keep-alive>
       </main>
       <StatusBar />
     </div>

@@ -102,6 +102,12 @@ fn run_scan(app: AppHandle, id: u32, drive: String, cancelled: Arc<AtomicBool>) 
         let mut entries: Vec<FileEntry> = Vec::new();
         let roots = category::roots_for(cat.id, &drive);
 
+        // 盘符隔离：该分类在所选盘无扫描根（如非系统盘的系统级垃圾）则跳过，不纳入结果，
+        // 避免把系统盘 C 的垃圾混入其他盘的扫描结果。
+        if roots.is_empty() {
+            continue;
+        }
+
         if cat.id == "recycle" {
             scan_recycle(&roots, &mut entries);
         } else {
