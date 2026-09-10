@@ -3,14 +3,19 @@ import { invoke } from "@tauri-apps/api/core"
 import type {
   CategoryResult,
   CleanResult,
+  DirDetail,
   DriveInfo,
   DupeScanResult,
   EnvInfo,
+  InstalledApp,
   LargeDeleteOutcome,
   LargeScanResult,
   RecoveryEntry,
+  ResidueDir,
+  ResidueInput,
   ScanResultDto,
   Settings,
+  SpaceScanResult,
   Stats,
 } from "./types"
 
@@ -46,18 +51,43 @@ export const api = {
     invoke<DupeScanResult>("get_dupe_scan_result", { sessionId }),
   deleteDupeFiles: (paths: string[]) => invoke<CleanResult>("delete_dupe_files", { paths }),
   openPath: (path: string) => invoke<void>("open_path", { path }),
+  // M3：应用卸载
+  listInstalledApps: () => invoke<InstalledApp[]>("list_installed_apps"),
+  launchUninstall: (app: { name: string; uninstallString: string; isUwp: boolean; id: string }) =>
+    invoke<void>("launch_uninstall", {
+      uninstallString: app.uninstallString,
+      displayName: app.name,
+      packageFullName: app.isUwp ? app.id.replace(/^uwp:/, "") : "",
+      isUwp: app.isUwp,
+    }),
+  scanResidues: (displayName: string, publisher: string, installLocation: string) =>
+    invoke<ResidueDir[]>("scan_residues", { displayName, publisher, installLocation }),
+  cleanResidues: (dirs: ResidueInput[]) => invoke<CleanResult>("clean_residues", { dirs }),
+  // M3：空间分析
+  startSpaceScan: (drive: string) => invoke<number>("start_space_scan", { drive }),
+  cancelSpaceScan: (sessionId: number) => invoke<void>("cancel_space_scan", { sessionId }),
+  getSpaceScanResult: (sessionId: number) =>
+    invoke<SpaceScanResult>("get_space_scan_result", { sessionId }),
+  getDirDetail: (sessionId: number, path: string) =>
+    invoke<DirDetail>("get_dir_detail", { sessionId, path }),
+  deleteDirToRecovery: (path: string) => invoke<CleanResult>("delete_dir_to_recovery", { path }),
 }
 
 export type {
   CategoryResult,
   CleanResult,
+  DirDetail,
   DriveInfo,
   DupeScanResult,
   EnvInfo,
+  InstalledApp,
   LargeDeleteOutcome,
   LargeScanResult,
   RecoveryEntry,
+  ResidueDir,
+  ResidueInput,
   ScanResultDto,
   Settings,
+  SpaceScanResult,
   Stats,
 }

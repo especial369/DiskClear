@@ -1,0 +1,51 @@
+# ============================================
+# DiskClear 盘清 — 项目级忽略规则
+# ============================================
+
+# ---------- 依赖与构建产物 ----------
+node_modules/
+dist/
+dist-ssr/
+*.local
+
+# Rust / Tauri（保留 Cargo.lock：桌面应用项目应提交锁定文件）
+target/
+src-tauri/target/
+src-tauri/gen/schemas/
+
+# ---------- 日志 ----------
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# ---------- 环境与配置文件 ----------
+.env
+.env.*
+!.env.example
+
+# ---------- 编辑器 / IDE ----------
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+.vscode/*
+!.vscode/extensions.json
+
+# ---------- Windows 系统文件 ----------
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# ---------- macOS ----------
+.DS_Store
+
+# ---------- 本地工具数据 ----------
+# ZCode CLI 会话计划等本地工作痕迹
+.zcode/

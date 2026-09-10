@@ -327,6 +327,162 @@ pub fn move_paths_to_recovery(
     Ok(result)
 }
 
+/// M3（PRD 2.6）：目录级残留移入恢复区（应用卸载残留清理，类别 `uninstall-residue`）。
+/// 仅接受目录，双重校验：路径必须位于 `allowed_roots`（卸载残留根）之下，
+/// 且不在用户白名单目录（settings.whitelist_dirs）内。
+pub fn move_residue_dirs_to_recovery(
+    app: &AppHandle,
+    state: &crate::AppState,
+    dirs: Vec<(String, u64)>,
+    allowed_roots: &[PathBuf],
+) -> Result<CleanResult, String> {
+    let settings = crate::settings::load();
+    let now = now_ms();
+    let batch_id = format!(
+        "{}_{}",
+        chrono_stamp(now),
+        state.next_session.fetch_add(1, Ordering::SeqCst)
+    );
+    let retention_ms = settings.recovery_retention_days as u64 * 86_400_000;
+    let mut result = CleanResult {
+        batch_id: batch_id.clone(),
+        ..Default::default()
+    };
+    let mut pending: Vec<RecoveryEntry> = Vec::new();
+    let total = dirs.len();
+
+    for (i, (p, size)) in dirs.iter().enumerate() {
+        let path = PathBuf::from(p);
+        let _ = app.emit(
+            "clean-progress",
+            serde_json::json!({ "done": i, "total": total, "freedBytes": result.freed_bytes, "skippedLocked": result.skipped_locked }),
+        );
+        let Ok(md) = std::fs::metadata(util::long_path(&path)) else {
+            result.skipped_missing += 1;
+            continue;
+        };
+        if !md.is_dir() {
+            result.rejected_unsafe += 1;
+            continue;
+        }
+        // 防线 1：仅允许位于卸载残留根（ProgramFiles/ProgramFiles(x86)/ProgramData/LOCALAPPDATA）之下
+        if !under_any_root(&path, allowed_roots) {
+            result.rejected_unsafe += 1;
+            continue;
+        }
+        // 防线 2：用户白名单目录额外保护
+        if settings
+            .whitelist_dirs
+            .iter()
+            .any(|w| under_any_root(&path, &[PathBuf::from(w)]))
+        {
+            result.rejected_unsafe += 1;
+            continue;
+        }
+        move_one(
+            &path,
+            *size,
+            "uninstall-residue",
+            None,
+            &batch_id,
+            i + 1,
+            now,
+            retention_ms,
+            &mut result,
+            &mut pending,
+        );
+    }
+
+    if !pending.is_empty() {
+        recovery::insert_entries(state, pending);
+    }
+    recovery::startup_maintenance(state);
+    result.recovery_bytes = recovery::total_size(state);
+    add_freed_total(result.freed_bytes);
+
+    let _ = app.emit(
+        "clean-progress",
+        serde_json::json!({ "done": total, "total": total, "freedBytes": result.freed_bytes, "skippedLocked": result.skipped_locked, "finished": true }),
+    );
+    Ok(result)
+}
+
+/// M3（PRD 2.5）：空间分析右键删除目录 → 恢复区（可撤销）。
+/// 防线：拒绝 PRD 6.2 系统关键目录、用户白名单目录、应用自身恢复区；仅接受目录。
+pub fn move_dir_to_recovery_guarded(
+    state: &crate::AppState,
+    path: &str,
+) -> Result<CleanResult, String> {
+    let p = PathBuf::from(path);
+    let Ok(md) = std::fs::metadata(util::long_path(&p)) else {
+        return Err("目录不存在或已被删除".to_string());
+    };
+    if !md.is_dir() {
+        return Err("仅支持删除目录".to_string());
+    }
+    let ps = p.to_string_lossy().replace('/', "\\").to_lowercase();
+    if ps.contains("$diskclear") {
+        return Err("不能删除恢复区目录".to_string());
+    }
+    // PRD 6.2 系统关键目录（含 %LOCALAPPDATA%\Microsoft）
+    let mut critical: Vec<PathBuf> = [
+        r"C:\Windows",
+        r"C:\Program Files",
+        r"C:\Program Files (x86)",
+        r"C:\ProgramData",
+    ]
+    .iter()
+    .map(PathBuf::from)
+    .collect();
+    if let Ok(la) = std::env::var("LOCALAPPDATA") {
+        critical.push(PathBuf::from(la).join("Microsoft"));
+    }
+    if under_any_root(&p, &critical) {
+        return Err("系统关键目录受保护，不允许删除（PRD 6.2）".to_string());
+    }
+    let settings = crate::settings::load();
+    if settings
+        .whitelist_dirs
+        .iter()
+        .any(|w| under_any_root(&p, &[PathBuf::from(w)]))
+    {
+        return Err("该目录在用户白名单中，不允许删除".to_string());
+    }
+
+    let now = now_ms();
+    let batch_id = format!(
+        "{}_{}",
+        chrono_stamp(now),
+        state.next_session.fetch_add(1, Ordering::SeqCst)
+    );
+    let mut result = CleanResult {
+        batch_id: batch_id.clone(),
+        ..Default::default()
+    };
+    let mut pending = Vec::new();
+    let size = util::dir_size(&p);
+    let ok = move_one(
+        &p,
+        size,
+        "space",
+        None,
+        &batch_id,
+        1,
+        now,
+        settings.recovery_retention_days as u64 * 86_400_000,
+        &mut result,
+        &mut pending,
+    );
+    if !ok {
+        return Err("移入恢复区失败（目录可能被占用）".to_string());
+    }
+    recovery::insert_entries(state, pending);
+    recovery::startup_maintenance(state);
+    result.recovery_bytes = recovery::total_size(state);
+    add_freed_total(result.freed_bytes);
+    Ok(result)
+}
+
 #[derive(Serialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct LargeDeleteOutcome {
@@ -514,6 +670,14 @@ mod tests {
         let base = std::env::temp_dir().join(format!("dc_large_del_{}", std::process::id()));
         let src_dir = base.join("orig");
         std::fs::create_dir_all(util::long_path(&src_dir)).unwrap();
+
+        // 受限环境（如沙箱禁止盘根/LOCALAPPDATA 写入）无法创建恢复区：环境相关，跳过
+        let small_probe = src_dir.join("probe.bin");
+        std::fs::write(&small_probe, vec![7u8; 4096]).unwrap();
+        if crate::recovery::ensure_recovery_root(&small_probe).is_err() {
+            let _ = std::fs::remove_dir_all(util::long_path(&base));
+            return;
+        }
 
         // ≤5GB：允许走恢复区。为避免造 5GB 文件，这里仅验证"未确认时小文件不报错"
         let small = src_dir.join("small.bin");

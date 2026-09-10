@@ -11,7 +11,7 @@ use crate::recovery::RecoveryEntry;
 use crate::scan::{CategoryResult, ScanSession};
 use crate::settings::Settings;
 use crate::util::DriveInfo;
-use crate::{clean, recovery, scan, settings, util};
+use crate::{clean, recovery, scan, settings, space, uninstall, util};
 
 #[derive(serde::Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -225,4 +225,115 @@ pub async fn delete_dupe_files(
 pub fn open_path(path: String) -> Result<(), String> {
     tauri_plugin_opener::reveal_item_in_dir(std::path::Path::new(&path))
         .map_err(|e| e.to_string())
+}
+
+// ---------- M3：应用卸载（PRD 2.6 v1 简单版） ----------
+
+/// 已安装程序列表：注册表 Uninstall 键（HKLM×2 + HKCU）+ UWP。
+/// PowerShell 枚举 UWP 较慢（约 1-3 秒），放 spawn_blocking。
+#[tauri::command]
+pub async fn list_installed_apps() -> Result<Vec<uninstall::InstalledApp>, String> {
+    spawn_blocking(uninstall::list_installed_apps)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// 调起程序自带卸载器；卸载器退出后后端 emit "uninstall-exited"。
+#[tauri::command]
+pub fn launch_uninstall(
+    app: AppHandle,
+    uninstall_string: String,
+    display_name: String,
+    package_full_name: String,
+    is_uwp: bool,
+) -> Result<(), String> {
+    uninstall::launch_uninstall(
+        &app,
+        &uninstall_string,
+        &display_name,
+        &package_full_name,
+        is_uwp,
+    )
+}
+
+/// 目录级残留扫描（仅 ProgramFiles/ProgramFiles(x86)/ProgramData/LOCALAPPDATA 四根；
+/// 注册表残留清理明确不在 v1 范围）。目录大小计算可能较慢，放 spawn_blocking。
+#[tauri::command]
+pub async fn scan_residues(
+    display_name: String,
+    publisher: String,
+    install_location: String,
+) -> Result<Vec<uninstall::ResidueDir>, String> {
+    spawn_blocking(move || {
+        Ok(uninstall::scan_residues(&display_name, &publisher, &install_location))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// 残留清理：用户勾选确认后移入恢复区（clean.rs 双重防线校验：残留根 + 用户白名单）。
+#[tauri::command]
+pub async fn clean_residues(
+    app: AppHandle,
+    state: State<'_, crate::AppState>,
+    dirs: Vec<uninstall::ResidueInput>,
+) -> Result<clean::CleanResult, String> {
+    let app2 = app.clone();
+    let moved_state = state.inner().clone_shared();
+    spawn_blocking(move || {
+        let roots = uninstall::residue_roots();
+        let pairs: Vec<(String, u64)> = dirs.into_iter().map(|d| (d.path, d.size)).collect();
+        clean::move_residue_dirs_to_recovery(&app2, &moved_state, pairs, &roots)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+// ---------- M3：空间分析（PRD 2.5） ----------
+
+#[tauri::command]
+pub fn start_space_scan(
+    app: AppHandle,
+    state: State<'_, crate::AppState>,
+    drive: String,
+) -> u32 {
+    space::start_space_scan(app, &state, drive)
+}
+
+#[tauri::command]
+pub fn cancel_space_scan(state: State<'_, crate::AppState>, session_id: u32) {
+    space::cancel(&state, session_id);
+}
+
+#[tauri::command]
+pub fn get_space_scan_result(
+    state: State<'_, crate::AppState>,
+    session_id: u32,
+) -> Result<space::SpaceTreeDto, String> {
+    space::get_result(&state, session_id)
+        .ok_or_else(|| "分析会话不存在或已过期，请重新分析".to_string())
+}
+
+/// 懒下钻：返回指定目录的直接子目录（深度 1，按大小降序）。
+#[tauri::command]
+pub fn get_dir_detail(
+    state: State<'_, crate::AppState>,
+    session_id: u32,
+    path: String,
+) -> Result<space::DirDetailDto, String> {
+    space::get_dir_detail(&state, session_id, &path)
+        .ok_or_else(|| "目录不在该分析会话中".to_string())
+}
+
+/// 空间分析右键删除目录 → 恢复区（PRD 2.5）。clean.rs 内置防线：
+/// 拒绝 PRD 6.2 系统关键目录、用户白名单、应用恢复区。
+#[tauri::command]
+pub async fn delete_dir_to_recovery(
+    state: State<'_, crate::AppState>,
+    path: String,
+) -> Result<clean::CleanResult, String> {
+    let moved_state = state.inner().clone_shared();
+    spawn_blocking(move || clean::move_dir_to_recovery_guarded(&moved_state, &path))
+        .await
+        .map_err(|e| e.to_string())?
 }

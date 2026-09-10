@@ -8,6 +8,8 @@ mod dupes;
 mod recovery;
 mod scan;
 mod settings;
+mod space;
+mod uninstall;
 mod util;
 mod walker;
 
@@ -20,13 +22,14 @@ use tauri::Manager;
 use cache::HashCache;
 use scan::ScanSession;
 
-/// 全局应用状态：扫描会话 + 恢复区写锁 + M2 大文件/重复文件会话 + 哈希缓存。
+/// 全局应用状态：扫描会话 + 恢复区写锁 + M2 大文件/重复文件会话 + M3 空间分析会话 + 哈希缓存。
 /// 内部字段全部 Arc 化，便于命令层 clone 后跨线程使用（spawn_blocking）。
 #[derive(Clone)]
 pub struct AppState {
     pub sessions: Arc<Mutex<HashMap<u32, ScanSession>>>,
     pub big_sessions: Arc<Mutex<HashMap<u32, bigfiles::LargeScanSession>>>,
     pub dupe_sessions: Arc<Mutex<HashMap<u32, DupeScanSessionRef>>>,
+    pub space_sessions: Arc<Mutex<HashMap<u32, space::SpaceSession>>>,
     pub next_session: Arc<AtomicU32>,
     pub cancels: Arc<Mutex<HashMap<u32, Arc<std::sync::atomic::AtomicBool>>>>,
     pub recovery_lock: Arc<Mutex<()>>,
@@ -42,6 +45,7 @@ impl AppState {
             sessions: Arc::new(Mutex::new(HashMap::new())),
             big_sessions: Arc::new(Mutex::new(HashMap::new())),
             dupe_sessions: Arc::new(Mutex::new(HashMap::new())),
+            space_sessions: Arc::new(Mutex::new(HashMap::new())),
             next_session: Arc::new(AtomicU32::new(1)),
             cancels: Arc::new(Mutex::new(HashMap::new())),
             recovery_lock: Arc::new(Mutex::new(())),
@@ -93,6 +97,17 @@ pub fn run() {
             commands::get_dupe_scan_result,
             commands::delete_dupe_files,
             commands::open_path,
+            // M3：应用卸载
+            commands::list_installed_apps,
+            commands::launch_uninstall,
+            commands::scan_residues,
+            commands::clean_residues,
+            // M3：空间分析
+            commands::start_space_scan,
+            commands::cancel_space_scan,
+            commands::get_space_scan_result,
+            commands::get_dir_detail,
+            commands::delete_dir_to_recovery,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

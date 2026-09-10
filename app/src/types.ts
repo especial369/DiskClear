@@ -154,6 +154,85 @@ export interface DupeProgress {
   groups: number
 }
 
+// ---------- M3：应用卸载 ----------
+
+export interface InstalledApp {
+  id: string
+  name: string
+  version: string
+  publisher: string
+  installDate: string
+  /** 字节；未知为 0 */
+  estimatedSize: number
+  uninstallString: string
+  installLocation: string
+  isUwp: boolean
+}
+
+export interface ResidueDir {
+  path: string
+  size: number
+  /** 名称匹配 / 发布者匹配 / 注册表安装位置 */
+  reason: string
+}
+
+export interface ResidueInput {
+  path: string
+  size: number
+}
+
+// ---------- M3：空间分析 ----------
+
+export interface DirNode {
+  name: string
+  path: string
+  size: number
+  fileCount: number
+  /** 主导文件类型类别 id（0-7，见 SPACE_CATEGORY_LABELS） */
+  dominant: number
+  hasChildren: boolean
+  children: DirNode[]
+}
+
+export interface SpaceScanResult {
+  sessionId: number
+  drive: string
+  done: boolean
+  totalBytes: number
+  fileCount: number
+  dirCount: number
+  skippedDirs: number
+  root: DirNode
+}
+
+export interface DirDetail {
+  path: string
+  name: string
+  size: number
+  fileCount: number
+  dominant: number
+  children: DirNode[]
+}
+
+export interface SpaceProgress {
+  sessionId: number
+  dirs: number
+  files: number
+  bytes: number
+}
+
+/** 与 Rust space::CATEGORY_LABELS 一致 */
+export const SPACE_CATEGORY_LABELS = [
+  "其他",
+  "影音",
+  "图片",
+  "音频",
+  "压缩包",
+  "镜像",
+  "安装包",
+  "文档",
+] as const
+
 /** 大文件删除的 5GB 恢复区上限（与 Rust clean::RECOVERY_MAX_FILE_BYTES 一致） */
 export const RECOVERY_MAX_FILE_BYTES = 5 * 1024 * 1024 * 1024
 
